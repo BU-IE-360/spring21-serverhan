@@ -1,3 +1,10 @@
+#Example Progress Journal
+
+##Week 0 (2 April 2021)
+
+[here](files/Interesting Forecasting Applications with R.html)
+
+
 ## Welcome to GitHub Pages
 
 You can use the [editor on GitHub](https://github.com/BU-IE-360/spring21-serverhan/edit/gh-pages/index.md) to maintain and preview the content for your website in Markdown files.
