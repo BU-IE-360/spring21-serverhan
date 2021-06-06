@@ -1,5 +1,10 @@
 #Example Progress Journal
 
-##Week 0 (2 April 2021)
+##Homework0
 
-[here](files/Interesting Forecasting Applications with R.html)
+[here](files/Interesting Forecasting Applications with R.html) Interesting Forecasting Applications with R
+
+
+##Homework1
+
+[here](files/HW1/HW1.html) 
