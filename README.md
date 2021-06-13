@@ -32,4 +32,4 @@ Homework 2
 
 Homework 3
 
-[HW3 Link](spring21-serverhan/files/HW3)
+[HW3 Link](https://github.com/BU-IE-360/spring21-serverhan/tree/main/files/HW3)
