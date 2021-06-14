@@ -27,3 +27,9 @@ Homework1
 Homework 2
 
 [HW2 Link](https://github.com/BU-IE-360/spring21-serverhan/blob/main/files/HW2/HW2.html)
+
+-------------------------------------------
+
+Homework 3
+
+[HW3 Link](https://github.com/BU-IE-360/spring21-serverhan/tree/main/files/HW3)
