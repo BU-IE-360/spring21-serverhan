@@ -4,7 +4,7 @@ Serverhan Demirboğan's Progress Journal
 
 Files
 
-[Files](https://github.com/BU-IE-360/spring21-serverhan/tree/gh-pages/files) Link to folder that includes my all work
+[Files](files) Link to folder that includes my all work
 
 
 -------------------------------------------
