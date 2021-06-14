@@ -4,21 +4,21 @@ Serverhan Demirboğan's Progress Journal
 
 Files
 
-[Files](spring21-serverhan/files/) Link to folder that includes my all work
+[Files](files) Link to folder that includes my all work
 
 
 -------------------------------------------
 
 Homework0
 
-[HW0 Link](https://github.com/BU-IE-360/spring21-serverhan/blob/main/files/Interesting%20Forecasting%20Applications%20with%20R.html) Interesting Forecasting Applications with R
+[HW0 Link](files/Interesting%20Forecasting%20Applications%20with%20R.html) Interesting Forecasting Applications with R
 
 
 -------------------------------------------
 
 Homework1
 
-[HW1 Link](https://github.com/BU-IE-360/spring21-serverhan/blob/main/files/HW1/HW1.html)
+[HW1 Link](files/HW1/HW1.html)
 
 
 
@@ -26,10 +26,10 @@ Homework1
 
 Homework 2
 
-[HW2 Link](https://github.com/BU-IE-360/spring21-serverhan/blob/main/files/HW2/HW2.html)
+[HW2 Link](files/HW2/HW2.html)
 
 -------------------------------------------
 
 Homework 3
 
-[HW3 Link](https://github.com/BU-IE-360/spring21-serverhan/tree/main/files/HW3)
+[HW3 Link](files/HW3/hw3.html)
