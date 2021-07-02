@@ -1,0 +1,1476 @@
+---
+title: "Forecasting Sales Quantity of Nine Products from Trendyol with ARIMAX Models"
+author: "Muhammet Enes ÜSTÜN, Serverhan DEMİRBOĞAN"
+date: "6/27/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+
+# Introduction
+
+In this study, we are trying to find new methods to forecast sales value of nine products sold at Trendyol which are "48740784" Mont (ALTINYILDIZ CLASSICS), "73318567" Bikini Ustu (TRENDYOLMILLA), "32737302" Bikini Ustu (TRENDYOLMILLA), "31515569" Alt Giyim Tayt (TRENDYOLMILLA), "6676673" Bluetooth Kulaklık (Xiaomi), "7061886" Dik Supurge (Fakir), "85004" Yuz Temizleyici (La Roche Posay), "4066298" Islak Mendil (Sleepy), "32939029" Agız Bakım Sarj Edebilir Dis Fırcası (Oral-B). We have available data from 25.05.2020 to 25.06.2021. We divide this period to train and test. Because of the dirty nature of data, some sales are zero for a long time, we assume there is no stoch at that date and we eliminated those dates from train period for some of the products. Test dates is last seven days correspond to 19.06.2021-25.06.2021. Firstly, for each product, seasonality analyzed, data is decomposed at dedicated levels, ARIMA models constructed, and their performance were analyzed (using MAE and MAPE). Then we checked possible regressors to improve our models, and use the appropriate ones in ARIMA with regressors models. During a test week, we checked if there is any performance improvement upon existing models.
+
+---
+
+First, required libraries are used, and data is gathered.
+
+```{r, warning=FALSE, message=FALSE}
+require(ggplot2)
+library(xts)
+library(forecast)
+library(gtools)
+library(dplyr)
+library(urca)
+library(data.table)
+library(readxl)
+```
+
+
+```{r}
+data = read_excel("/Users/muhammetenesustun/desktop/HW4-5.xlsx")
+n=397
+dates = seq(as.Date("2020-05-25"), length = n, by = "days")
+test_dates=seq(as.Date("2021-06-19"), length = n-390, by = "days")
+```
+
+---
+
+## Product 1 (Altınyıldız Mont)
+
+```{r}
+prod1=subset(data, data$product_content_id==48740784)
+plot(dates,prod1$sold_count,type="l", main="Product 1 Sales", xlab= "Dates", ylab= "Sales")
+```
+
+Let's check autocorrelations to detect if there is any seasonality.
+
+```{r}
+acf(prod1$sold_count)
+acf(prod1$sold_count, lag.max = 100)
+pacf(prod1$sold_count)
+```
+
+Autocorrelations at lag=7 is somehow higher, also we checked at lag = 100 to detect if there is wider seasonality. It looks that first 21 lag is higher than remaining. KPSS test is applied to check if our sales data stationary or not.
+
+```{r}
+test=ur.kpss(prod1$sold_count)
+summary(test)
+```
+
+Test statistic is below critical values, so our data is stationary. We can continue to construct models. However, let's decompose data at different levels to refine data from seasonal and trended impacts. First, decompose at freq=7 and assume that there is daily seasonality. Variance is not constant over time but we cannot say that there is increasing or decreasing variance so, let's use additive decomposing.
+
+```{r}
+prod1_xts=ts(prod1, freq=7)
+prod1_train_xts=prod1_xts[index(prod1_xts)<"2021-06-19" & index(prod1_xts)>="2020-09-29"]
+prod1_test_xts=prod1_xts[index(prod1_xts)>="2021-06-19"]
+
+prod1_7=ts(prod1$sold_count,freq=7)
+Decomposed7=decompose(prod1_7, type="additive")
+plot(Decomposed7)
+```
+Trend is neither increasing nor decreasing. Also, it is not constant over time. Because freq=7 it tooks average of every 7 data points. It  traces the path of data very similarly. This stems from there is no sales most of the time.
+Seasonal variable also eliminates of the daily seasonal effect, there is sinusiodal pattern like cardiograph.
+
+Because our data include almost 13 months for each product, it is impossible to decompose data at weekly, monthly or yearly level.
+When we try to decompose at weekly level (which corresponds to frequency equals 7*52=364 or we can first aggregate data to weekly level and then make it time series with freq=52), our data contains 397 data point for each product so, time series will be less than two seasons.
+It is also true for monthly because we have only 13 months, while we should use freq=12 aggregating our data points to monthly level.
+And same scenario for the decomposing at yearly level, we don't have at least three years data to detect yearly seasonality. 
+
+
+```{r, eval=FALSE}
+"prod1_364=ts(prod1$sold_count,freq=364)
+Decomposed364=decompose(prod1_364, type=additive)
+plot(Decomposed364)"
+```
+
+We get the error: Error in decompose(prod1_364, type = "additive") : time series has no or less than 2 periods
+
+We continue with decomposed series at freq=7 and type=additive. Because random variable looks stationary, we apply Kpss stationarity test to detrended and deseasonalized data.
+
+```{r}
+Trend=Decomposed7$trend
+Seasonal=Decomposed7$seasonal
+Random=Decomposed7$random
+
+stationaritytest=ur.kpss(Random)
+summary(stationaritytest)
+```
+
+Data looks stationary according to test statistic we get from KPSS stationary test. 
+
+```{r}
+acf(Random, lag.max = 30, na.action = na.pass,  main = " ACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+pacf(Random, lag.max = 30, na.action = na.pass,  main = " PACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+```
+
+Autocorrelations are decreased but there is some negative partial autocorrelations. We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+model1=arima(Random,order=c(2,0,3))
+AIC(model1)
+checkresiduals(model1)
+```
+
+Residuals have mean zero but there is some outliers which do not obey the assumption of constant variance. Also autocorrelations is low now. Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random - model1$residuals
+transformed_fitted = fitted + Trend + Seasonal
+
+plot(prod1_7[1:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 1 (Altınyıldız Mont) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[1:390], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA model selected. Because last three values are missing due to decomposing (moving average for trend variable), ten days-ahead predictions are performed. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted it and calculated Mean Absolute Error (MAE) for ARIMA model in 7-days test period.
+
+```{r}
+forecast = predict(model1, n.ahead = 10)$pred
+forecast_ts = ts(forecast, frequency = 7, start=c(56,3))
+
+Trend1 = tail(Trend[!is.na(Trend)],1)
+Seasonal1 = Seasonal[1:10]
+forecast1 = forecast_ts + Trend1 + Seasonal1
+
+plot(prod1_7, type= "l", ylab = "Sales Quantity ", xlab = "Weeks", main="Actual vs Predicted Values of Product 1 (Altınyıldız Mont) Sales in Last 7 Days", xlim=c(52,58))
+points(forecast1, type = "l", col = "red")
+
+prod1_mae_arima=100*mean(abs((forecast1[4:10]-prod1$sold_count[391:397])))
+prod1_mae_arima
+
+```
+
+Then we check correlations to decide which regressors to use in ARIMA model, some regressors are full of zero or most of them are zero such as favored_count, category_basket and category_brand_sold. Some of others is fuzzy from some point like ty_visit. That's why we didn't use them as regressors. Most of the time, we use price, basket_count, category_sold and category_favored. For each product, these regressors with highly correlated are tried to be implement to ARIMA models.
+
+```{r}
+cor(prod1$sold_count, prod1$price)
+cor(prod1$sold_count, prod1$basket_count)
+cor(prod1$sold_count, prod1$category_sold)
+cor(prod1$sold_count, prod1$category_favored)
+```
+
+Continue with highest correlated regressors with the sales quantity, and use them in the Arima as xreg. They are seperated to train and test dates.
+We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+prod1_xreg1=cbind(prod1$price[128:390],prod1$basket_count[128:390],prod1$category_sold[128:390])
+prod1_xreg2=cbind(prod1$price[391:n],prod1$basket_count[391:n], prod1$category_sold[391:n])
+
+arima_prod1=Arima(Random[128:390],xreg=as.matrix(prod1_xreg1),order=c(2,0,3))
+AIC(arima_prod1)
+```
+
+AIC is now lower than no regressor used model. Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random[128:390] - arima_prod1$residuals
+transformed_fitted = fitted + Trend[128:390] + Seasonal[128:390]
+
+plot(prod1_7[128:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 1 (Altınyıldız Mont) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[1:263], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA with regressors model selected. Using last trend value and seasonality, forecasted values are backtransformed. Also we plotted the predicted and actual values and how far we are from reality and check if there is improvement on MAPE or not.
+
+
+```{r}
+forecast_arima_prod1=forecast(arima_prod1,xreg=as.matrix(prod1_xreg2))
+forecast_arima_prod1_xts=xts(forecast_arima_prod1$mean,order.by=test_dates)
+
+TrendX = tail(Trend[!is.na(Trend)],1)
+SeasonalX = Seasonal[1:7]
+forecastX = forecast_arima_prod1_xts + TrendX + SeasonalX
+
+plot(dates,prod1$sold_count, type="l",xlim=as.Date(c("2021-06-01", "2021-06-25")),xlab="Dates between 2021-06-01 and 2021-06-25", ylab = "Sales Quantity ",main="Actual vs Predicted Values of Product 1 (Altınyıldız Mont) Sales in Last 7 Days",)
+points(test_dates,forecastX, type= "l", col ="red")
+
+prod1_MAE_ARIMAX=100*mean(abs((forecastX-prod1$sold_count[391:397])))
+prod1_MAE_ARIMAX
+```
+
+Because there is 0 on the actual values, MAPE computation of Product 1 is problematic. So, we used MAE (Mean Absolute Error). MAE is increased from 78.67722 to 136.3062 but this does not tell much thing because sales are so small that minor differences cause bigger errors.
+Let's check other products.
+
+---
+
+## Product 2 (Oral-B Diş Fırçası)
+
+```{r}
+prod2=subset(data, data$product_content_id==32939029)
+plot(dates,prod2$sold_count,type="l", main="Product 2 Sales", xlab= "Dates", ylab= "Sales")
+```
+
+Let's check autocorrelations to detect if there is any seasonality.
+
+```{r}
+acf(prod2$sold_count)
+acf(prod2$sold_count, lag.max = 100)
+pacf(prod2$sold_count)
+```
+
+Autocorrelations at lag=7 is somehow higher, also we checked at lag = 100 to detect if there is wider seasonality. It looks that first 21 lag is higher than remaining. KPSS test is applied to check if our sales data stationary or not.
+
+```{r}
+test=ur.kpss(prod2$sold_count)
+summary(test)
+```
+
+
+Test statistic is below critical values, so our data is stationary. We can continue to construct models. However, let's decompose data at different levels to refine data from seasonal and trended impacts. First, decompose at freq=7 and assume that there is daily seasonality. Variance is not increasing so much, let's use additive decomposing.
+
+
+```{r}
+prod2_xts=ts(prod2, freq=7)
+prod2_train_xts=prod2_xts[index(prod2_xts)<"2021-06-19" & index(prod2_xts)>="2020-05-25"]
+prod2_test_xts=prod2_xts[index(prod2_xts)>="2021-06-19"]
+
+prod2_7=ts(prod2$sold_count,freq=7)
+Decomposed7=decompose(prod2_7, type="additive")
+plot(Decomposed7)
+
+```
+Trend is somehow increasing but not all the time. Also, it is not constant over time. Because freq=7 it tooks average of every 7 data points. It  traces the path of data very similarly. 
+Seasonal variable also eliminates of the daily seasonal effect, there is sinusiodal pattern like cardiograph.
+
+Because our data include almost 13 months for each product, it is impossible to decompose data at weekly, monthly or yearly level.
+When we try to decompose at weekly level (which corresponds to frequency equals 7*52=364 or we can first aggregate data to weekly level and then make it time series with freq=52), our data contains 397 data point for each product so, time series will be less than two seasons.
+It is also true for monthly because we have only 13 months, while we should use freq=12 aggregating our data points to monthly level.
+And same scenario for the decomposing at yearly level, we don't have at least three years data to detect yearly seasonality. 
+
+
+```{r, eval=FALSE}
+"prod2_364=ts(prod2$sold_count,freq=364)
+Decomposed364=decompose(prod2_364, type=additive)
+plot(Decomposed364)"
+```
+
+We get the error: Error in decompose(prod2_364, type = "additive") : time series has no or less than 2 periods
+We continue with decomposed series at freq=7 and type=additive. Because random variable looks stationary, trend and seasonal variables make sense. 
+We apply Kpss stationarity test to detrended and deseasonalized data.
+
+```{r}
+Trend=Decomposed7$trend
+Seasonal=Decomposed7$seasonal
+Random=Decomposed7$random
+
+stationaritytest=ur.kpss(Random)
+summary(stationaritytest)
+```
+
+Data looks stationary according to test statistic we get from KPSS stationary test. 
+
+```{r}
+acf(Random, lag.max = 30, na.action = na.pass,  main = " ACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+pacf(Random, lag.max = 30, na.action = na.pass,  main = " PACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+```
+
+Autocorrelations are decreased but there is some negative partial autocorrelations. We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+model1=arima(Random, order=c(2,0,1))
+AIC(model1)
+checkresiduals(model1)
+```
+
+Residuals have some constant variance and mean zero. Also autocorrelations is low now. Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random - model1$residuals
+transformed_fitted = fitted + Trend + Seasonal
+
+plot(prod2_7[1:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 2 (Oral-B Diş Fırçası) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[1:390], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA model selected. Because last three values are missing due to decomposing (moving average for trend variable), ten days-ahead predictions are performed. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted it and calculated Mean Absolute Percentage Error (MAPE) for ARIMA model in 7-days test period.
+
+```{r}
+forecast = predict(model1, n.ahead = 10)$pred
+forecast_ts = ts(forecast, frequency = 7, start=c(56,3))
+
+Trend1 = tail(Trend[!is.na(Trend)],1)
+Seasonal1 = Seasonal[1:10]
+forecast1 = forecast_ts + Trend1 + Seasonal1
+
+plot(prod2_7, type= "l", ylab = "Sales Quantity ", xlab = "Weeks", main="Actual vs Predicted Values of Product 2 (Oral-B Diş Fırçası) Sales in Last 7 Days", xlim=c(52,58))
+points(forecast1, type = "l", col = "red")
+
+prod2_MAPE_ARIMA=100*mean(abs((forecast1[4:10]-prod2$sold_count[391:397])/prod2$sold_count[391:397]))
+prod2_MAPE_ARIMA
+
+```
+
+Then we check correlations to decide which regressors to use in ARIMA model, some regressors are full of zero or most of them are zero such as favored_count, category_basket and category_brand_sold. Some of others is fuzzy from some point like ty_visit. That's why we didn't use them as regressors. Most of the time, we use price, basket_count, category_sold and category_favored. For each product, these regressors with highly correlated are tried to be implement to ARIMA models.
+
+```{r}
+cor(prod2$sold_count, prod2$price)
+cor(prod2$sold_count, prod2$basket_count)
+cor(prod2$sold_count, prod2$category_sold)
+cor(prod2$sold_count, prod2$category_favored)
+```
+
+Continue with highest correlated regressors with the sales quantity, and use them in the Arima as xreg. They are seperated to train and test dates.
+We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+prod2_xreg1=cbind(prod2$basket_count[1:390],prod2$category_sold[1:390],prod2$category_favored[1:390])
+prod2_xreg2=cbind(prod2$basket_count[391:n], prod2$category_sold[391:n],prod2$category_favored[391:n])
+
+arima_prod2=Arima(Random[1:390],xreg=as.matrix(prod2_xreg1), order=c(2,0,1))
+AIC(arima_prod2)
+```
+
+AIC is now lower than no regressor used model. Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random[1:390] - arima_prod2$residuals
+transformed_fitted = fitted + Trend[1:390] + Seasonal[1:390]
+
+plot(prod2_7[1:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 2 (Oral-B Diş Fırçası) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[1:390], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA with regressors model selected. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted the predicted and actual values and how far we are from reality and check if there is improvement on MAPE or not.
+
+```{r}
+forecast_arima_prod2=forecast(arima_prod2,xreg=as.matrix(prod2_xreg2))
+forecast_arima_prod2_xts=xts(forecast_arima_prod2$mean,order.by=test_dates)
+
+TrendX = tail(Trend[!is.na(Trend)],1)
+SeasonalX = Seasonal[1:7]
+forecastX = forecast_arima_prod2_xts + TrendX + SeasonalX
+
+plot(dates,prod2$sold_count, type="l",xlim=as.Date(c("2021-06-01", "2021-06-25")),xlab="Dates between 2021-06-01 and 2021-06-25", ylab = "Sales Quantity ",main="Actual vs Predicted Values of Product 2 (Oral-B Diş Fırçası) Sales in Last 7 Days",)
+points(test_dates,forecastX, type= "l", col ="red")
+
+prod2_MAPE_ARIMAX=100*mean(abs((forecastX-prod2$sold_count[391:397])/prod2$sold_count[391:397]))
+prod2_MAPE_ARIMAX
+```
+
+Mean Absolute Percentage Error is decreased from 64.89717 to 39.17979 when we use regressors in selected ARIMA model.
+
+
+---
+
+## Product 3 (Sleepy Islak Mendil)
+
+```{r}
+prod3=subset(data, data$product_content_id==4066298)
+plot(dates,prod3$sold_count,type="l", main="Product 3 Sales", xlab= "Dates", ylab= "Sales")
+
+```
+
+Let's check autocorrelations to detect if there is any seasonality.
+
+```{r}
+acf(prod3$sold_count)
+acf(prod3$sold_count, lag.max = 100)
+pacf(prod3$sold_count)
+```
+
+Autocorrelations at lag=1 and lag=2 is higher, also we checked at lag = 100 to detect if there is wider seasonality. It looks that first 21 lag is higher than remaining. KPSS test is applied to check if our sales data stationary or not.
+
+```{r}
+test=ur.kpss(prod3$sold_count)
+summary(test)
+```
+
+
+Test statistic is below critical values, so our data is stationary. We can continue to construct models. However, let's decompose data at different levels to refine data from seasonal and trended impacts. First, decompose at freq=7 and assume that there is daily seasonality. Variance is not constant over time but we cannot say that there is increasing or decreasing variance so, let's use additive decomposing.
+
+
+```{r}
+prod3_xts=ts(prod3, freq=7)
+prod3_train_xts=prod3_xts[index(prod3_xts)<"2021-06-19" & index(prod3_xts)>="2020-05-25"]
+prod3_test_xts=prod3_xts[index(prod3_xts)>="2021-06-19"]
+
+prod3_7=ts(prod3$sold_count,freq=7)
+Decomposed7=decompose(prod3_7, type="additive")
+plot(Decomposed7)
+```
+Trend is neither increasing nor decreasing. Also, it is not constant over time, it is fluctuating around some value. Because freq=7 it tooks average of every 7 data points. It  traces the path of data very similarly. 
+Seasonal variable also eliminates of the daily seasonal effect, there is sinusiodal pattern like cardiograph.
+
+Because our data include almost 13 months for each product, it is impossible to decompose data at weekly, monthly or yearly level.
+When we try to decompose at weekly level (which corresponds to frequency equals 7*52=364 or we can first aggregate data to weekly level and then make it time series with freq=52), our data contains 397 data point for each product so, time series will be less than two seasons.
+It is also true for monthly because we have only 13 months, while we should use freq=12 aggregating our data points to monthly level.
+And same scenario for the decomposing at yearly level, we don't have at least three years data to detect yearly seasonality. 
+
+```{r, eval= FALSE}
+"prod3_364=ts(prod3$sold_count,freq=364)
+Decomposed364=decompose(prod3_364, type=additive)
+plot(Decomposed364)"
+```
+
+We get the error: Error in decompose(prod3_364, type = "additive") : time series has no or less than 2 periods
+We continue with decomposed series at freq=7 and type=additive. Because random variable looks stationary, trend and seasonal variables make sense. We apply Kpss stationarity test to detrended and deseasonalized data.
+
+```{r}
+Trend=Decomposed7$trend
+Seasonal=Decomposed7$seasonal
+Random=Decomposed7$random
+
+stationaritytest=ur.kpss(Random)
+summary(stationaritytest)
+```
+
+Data looks stationary according to test statistic we get from KPSS stationary test. 
+
+```{r}
+acf(Random, lag.max = 30, na.action = na.pass,  main = " ACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+pacf(Random, lag.max = 30, na.action = na.pass,  main = " PACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+```
+
+Now autocorrelations are decreased but there is severe partial autocorrelations. We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+model1=arima(Random, order=c(3,0,0))
+AIC(model1)
+checkresiduals(model1)
+```
+At lag=5 and lag= 16 there is some autocorrelations between resiaudals. Resiaduals obeys the rule of mean zero but variance is not seems constant. Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random - model1$residuals
+transformed_fitted = fitted + Trend + Seasonal
+
+plot(prod3_7[1:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 3 (Islak Mendil) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[1:390], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA model selected. Because last three values are missing due to decomposing (moving average for trend variable), ten days-ahead predictions are performed. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted it and calculated Mean Absolute Percentage Error (MAPE) for ARIMA model in 7-days test period.
+
+```{r}
+forecast = predict(model1, n.ahead = 10)$pred
+forecast_ts = ts(forecast, frequency = 7, start=c(56,3))
+
+Trend1 = tail(Trend[!is.na(Trend)],1)
+Seasonal1 = Seasonal[1:10]
+forecast1 = forecast_ts + Trend1 + Seasonal1
+
+plot(prod3_7, type= "l", ylab = "Sales Quantity ", xlab = "Weeks", main="Actual vs Predicted Values of Product 3 (Islak Mendil) Sales in Last 7 Days", xlim=c(52,58))
+points(forecast1, type = "l", col = "red")
+
+prod3_MAPE_ARIMA=100*mean(abs((forecast1[4:10]-prod3$sold_count[391:397])/prod3$sold_count[391:397]))
+prod3_MAPE_ARIMA
+
+```
+
+Then we check correlations to decide which regressors to use in ARIMA model, some regressors are full of zero or most of them are zero such as favored_count, category_basket and category_brand_sold. Some of others is fuzzy from some point like ty_visit. That's why we didn't use them as regressors. Most of the time, we use price, basket_count, category_sold and category_favored. For each product, these regressors with highly correlated are tried to be implement to ARIMA models.
+
+```{r}
+cor(prod3$sold_count, prod3$price)
+cor(prod3$sold_count, prod3$favored_count)
+cor(prod3$sold_count, prod3$basket_count)
+cor(prod3$sold_count, prod3$category_sold)
+cor(prod3$sold_count, prod3$category_favored)
+```
+
+Continue with highest correlated regressors with the sales quantity, and use them in the Arima as xreg. They are seperated to train and test dates.
+We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+prod3_xreg1=cbind(prod3$price[1:390],prod3$basket_count[1:390],prod3$category_sold[1:390],prod3$category_favored[1:390])
+prod3_xreg2=cbind(prod3$price[391:n],prod3$basket_count[391:n], prod3$category_sold[391:n],prod3$category_favored[391:n])
+
+arima_prod3=Arima(Random[1:390],xreg=as.matrix(prod3_xreg1), order=c(3,0,0))
+AIC(arima_prod3)
+```
+
+Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random[1:390] - arima_prod3$residuals
+transformed_fitted = fitted + Trend[1:390] + Seasonal[1:390]
+
+plot(prod3_7[1:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 3 (Sleepy Islak Mendil) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[1:390], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA with regressors model selected. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted the predicted and actual values and how far we are from reality and check if there is improvement on MAPE or not.
+
+```{r}
+forecast_arima_prod3=forecast(arima_prod3,xreg=as.matrix(prod3_xreg2))
+forecast_arima_prod3_xts=xts(forecast_arima_prod3$mean,order.by=test_dates)
+
+TrendX = tail(Trend[!is.na(Trend)],1)
+SeasonalX = Seasonal[1:7]
+forecastX = forecast_arima_prod3_xts + TrendX + SeasonalX
+
+plot(dates,prod3$sold_count, type="l",xlim=as.Date(c("2021-06-01", "2021-06-25")),xlab="Dates between 2021-06-01 and 2021-06-25", ylab = "Sales Quantity ",main="Actual vs Predicted Values of Product 3 (Sleepy Islak Mendil) Sales in Last 7 Days",)
+points(test_dates,forecastX, type= "l", col ="red")
+
+prod3_MAPE_ARIMAX=100*mean(abs((forecastX-prod3$sold_count[391:397])/prod3$sold_count[391:397]))
+prod3_MAPE_ARIMAX
+```
+
+Mean Absolute Percentage Error is decreased from 52.93418 to 42.22864 when we use regressors in selected ARIMA model.
+
+---
+
+## Product 4 (La Roche Posay Yüz Temizleyici)
+
+```{r}
+prod4=subset(data, data$product_content_id==85004)
+plot(dates,prod4$sold_count,type="l", main="Product 4 Sales", xlab= "Dates", ylab= "Sales")
+
+```
+
+Let's check autocorrelations to detect if there is any seasonality.
+
+```{r}
+acf(prod4$sold_count)
+acf(prod4$sold_count, lag.max = 100)
+pacf(prod4$sold_count)
+```
+
+There are severe autocorrelations at lag=1,2,3,15,16, also we checked at lag = 100 to detect if there is wider seasonality, likewise lag=65. KPSS test is applied to check if our sales data stationary or not.
+
+```{r}
+test=ur.kpss(prod4$sold_count)
+summary(test)
+```
+
+Test statistic is above critical values, so our data is not stationary. Let's decompose data at different levels to refine data from seasonal and trended impacts. First, decompose at freq=7 and assume that there is daily seasonality. Variance is not constant over time but we cannot say that there is increasing or decreasing variance so, let's use additive decomposing.
+
+```{r}
+prod4_xts=ts(prod4, freq=7)
+prod4_train_xts=prod4_xts[index(prod4_xts)<"2021-06-19" & index(prod4_xts)>="2020-05-25"]
+prod4_test_xts=prod4_xts[index(prod4_xts)>="2021-06-19"]
+
+prod4_7=ts(prod4$sold_count,freq=7)
+Decomposed7=decompose(prod4_7, type="additive")
+plot(Decomposed7)
+
+```
+Trend is neither increasing nor decreasing. Also, it is not constant over time, it fluctuates around some value. Because freq=7 it tooks average of every 7 data points. It  traces the path of data very similarly.
+Seasonal variable also eliminates of the daily seasonal effect, there is sinusiodal pattern like cardiograph.
+
+Because our data include almost 13 months for each product, it is impossible to decompose data at weekly, monthly or yearly level.
+When we try to decompose at weekly level (which corresponds to frequency equals 7*52=364 or we can first aggregate data to weekly level and then make it time series with freq=52), our data contains 397 data point for each product so, time series will be less than two seasons.
+It is also true for monthly because we have only 13 months, while we should use freq=12 aggregating our data points to monthly level.
+And same scenario for the decomposing at yearly level, we don't have at least three years data to detect yearly seasonality. 
+
+
+```{r, eval=FALSE}
+"prod4_364=ts(prod4$sold_count,freq=364)
+Decomposed364=decompose(prod4_364, type=additive)
+plot(Decomposed364)"
+```
+
+We get the error: Error in decompose(prod4_364, type = "additive") : time series has no or less than 2 periods.
+We continue with decomposed series at freq=7 and type=additive. Because random variable looks stationary, trend and seasonal variables make sense. 
+We apply Kpss stationarity test to detrended and deseasonalized data.
+
+```{r}
+Trend=Decomposed7$trend
+Seasonal=Decomposed7$seasonal
+Random=Decomposed7$random
+
+stationaritytest=ur.kpss(Random)
+summary(stationaritytest)
+```
+
+Data looks stationary according to test statistic we get from KPSS stationary test. 
+
+```{r}
+acf(Random, lag.max = 30, na.action = na.pass,  main = " ACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+pacf(Random, lag.max = 30, na.action = na.pass,  main = " PACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+```
+Autocorrelations and partial autocorrelations were decreased despite the fact that some PAC's have large negative values.
+We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+model1=arima(Random, order=c(3,0,1))
+AIC(model1)
+checkresiduals(model1)
+```
+Residuals have zero mean, and variance is not constant. Autocorrelations are not so high but it is a bit higher at lag=7 and lag=15.
+Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random - model1$residuals
+transformed_fitted = fitted + Trend + Seasonal
+
+plot(prod4_7[1:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 4 (LSP Yüz Temizleyici) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[1:390], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA model selected. Because last three values are missing due to decomposing (moving average for trend variable), ten days-ahead predictions are performed. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted it and calculated Mean Absolute Percentage Error (MAPE) for ARIMA model in 7-days test period.
+
+```{r}
+forecast = predict(model1, n.ahead = 10)$pred
+forecast_ts = ts(forecast, frequency = 7, start=c(56,3))
+
+Trend1 = tail(Trend[!is.na(Trend)],1)
+Seasonal1 = Seasonal[1:10]
+forecast1 = forecast_ts + Trend1 + Seasonal1
+
+plot(prod4_7, type= "l", ylab = "Sales Quantity ", xlab = "Weeks", main="Actual vs Predicted Values of Product 4 (LSP Yüz Temizleyici)) Sales in Last 7 Days", xlim=c(52,58))
+points(forecast1, type = "l", col = "red")
+
+prod4_MAPE_ARIMA=100*mean(abs((forecast1[4:10]-prod4$sold_count[391:397])/prod4$sold_count[391:397]))
+prod4_MAPE_ARIMA
+
+```
+
+Then we check correlations to decide which regressors to use in ARIMA model, some regressors are full of zero or most of them are zero such as favored_count, category_basket and category_brand_sold. Some of others is fuzzy from some point like ty_visit. That's why we didn't use them as regressors. Most of the time, we use price, basket_count, category_sold and category_favored. For each product, these regressors with highly correlated are tried to be implement to ARIMA models.
+
+```{r}
+cor(prod4$sold_count, prod4$price)
+cor(prod4$sold_count, prod4$basket_count)
+cor(prod4$sold_count, prod4$category_sold)
+cor(prod4$sold_count, prod4$category_favored)
+```
+
+Continue with highest correlated regressors with the sales quantity, and use them in the Arima as xreg. They are seperated to train and test dates.
+We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+prod4_xreg1=cbind(prod4$basket_count[1:390],prod4$category_favored[1:390])
+prod4_xreg2=cbind(prod4$basket_count[391:n],prod4$category_favored[391:n])
+
+arima_prod4=Arima(Random[1:390],xreg=as.matrix(prod4_xreg1), order=c(3,0,1))
+AIC(arima_prod4)
+```
+
+Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random[1:390] - arima_prod4$residuals
+transformed_fitted = fitted + Trend[1:390] + Seasonal[1:390]
+
+plot(prod4_7[1:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 4 (La Roche Posay Yüz Temizleyici) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[1:390], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA with regressors model selected. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted the predicted and actual values and how far we are from reality and check if there is improvement on MAPE or not.
+
+```{r}
+forecast_arima_prod4=forecast(arima_prod4,xreg=as.matrix(prod4_xreg2))
+forecast_arima_prod4_xts=xts(forecast_arima_prod4$mean,order.by=test_dates)
+
+TrendX = tail(Trend[!is.na(Trend)],1)
+SeasonalX = Seasonal[1:7]
+forecastX = forecast_arima_prod4_xts + TrendX + SeasonalX
+
+plot(dates,prod4$sold_count, type="l",xlim=as.Date(c("2021-06-01", "2021-06-25")),xlab="Dates between 2021-06-01 and 2021-06-25", ylab = "Sales Quantity ",main="Actual vs Predicted Values of Product 4 (La Roche Posay Yüz Temizleyici) Sales in Last 7 Days",)
+points(test_dates,forecastX, type= "l", col ="red")
+
+prod4_MAPE_ARIMAX=100*mean(abs((forecastX-prod4$sold_count[391:397])/prod4$sold_count[391:397]))
+prod4_MAPE_ARIMAX
+```
+
+Mean Absolute Percentage Error is decreased from 31.67578 to 19.13913 when we use regressors in selected ARIMA model.
+
+---
+
+## Product 5 (Xiaomi Kulaklık)
+
+```{r}
+prod5=subset(data, data$product_content_id==6676673)
+plot(dates,prod5$sold_count,type="l", main="Product 5 Sales", xlab= "Dates", ylab= "Sales")
+
+```
+
+Let's check autocorrelations to detect if there is any seasonality.
+
+```{r}
+acf(prod5$sold_count)
+acf(prod5$sold_count, lag.max = 100)
+pacf(prod5$sold_count)
+```
+
+Autocorrelations at lag=7 is somehow higher, also we checked at lag = 100 to detect if there is wider seasonality. It looks that first 40 lag is higher than remaining. KPSS test is applied to check if our sales data stationary or not.
+
+```{r}
+test=ur.kpss(prod5$sold_count)
+summary(test)
+```
+
+Test statistic is not above all critical values, so our data can be stationary. Let's decompose data at different levels to refine data from seasonal and trended impacts. First, decompose at freq=7 and assume that there is daily seasonality. Variance is not constant over time but we cannot say that there is increasing or decreasing variance so, let's use additive decomposing.
+
+```{r}
+prod5_xts=ts(prod5, freq=7)
+prod5_train_xts=prod5_xts[index(prod5_xts)<"2021-06-19" & index(prod5_xts)>="2020-05-25"]
+prod5_test_xts=prod5_xts[index(prod5_xts)>="2021-06-19"]
+
+prod5_7=ts(prod5$sold_count,freq=7)
+Decomposed7=decompose(prod5_7, type="additive")
+plot(Decomposed7)
+```
+Trend is neither increasing nor decreasing. Also, it is not constant over time, it fluctuates around some value. Because freq=7 it tooks average of every 7 data points. It  traces the path of data very similarly. 
+Seasonal variable also eliminates of the daily seasonal effect, there is sinusiodal pattern like cardiograph.
+
+Because our data include almost 13 months for each product, it is impossible to decompose data at weekly, monthly or yearly level.
+When we try to decompose at weekly level (which corresponds to frequency equals 7*52=364 or we can first aggregate data to weekly level and then make it time series with freq=52), our data contains 397 data point for each product so, time series will be less than two seasons.
+It is also true for monthly because we have only 13 months, while we should use freq=12 aggregating our data points to monthly level.
+And same scenario for the decomposing at yearly level, we don't have at least three years data to detect yearly seasonality. 
+
+
+```{r, eval=FALSE}
+"prod5_364=ts(prod5$sold_count,freq=364)
+Decomposed364=decompose(prod5_364, type=additive)
+plot(Decomposed364)"
+```
+
+We get the error: Error in decompose(prod5_364, type = "additive") : time series has no or less than 2 periods
+We continue with decomposed series at freq=7 and type=additive. Because random variable looks stationary, trend and seasonal variables make sense. 
+We apply Kpss stationarity test to detrended and deseasonalized data.
+
+```{r}
+Trend=Decomposed7$trend
+Seasonal=Decomposed7$seasonal
+Random=Decomposed7$random
+
+stationaritytest=ur.kpss(Random)
+summary(stationaritytest)
+```
+
+Data looks stationary according to test statistic we get from KPSS stationary test. 
+
+```{r}
+acf(Random, lag.max = 30, na.action = na.pass,  main = " ACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+pacf(Random, lag.max = 30, na.action = na.pass,  main = " PACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+```
+Autocorrelations and partial autocorrelations were decreased despite the fact that some PAC's have large negative values.
+We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+model1=arima(Random, order=c(3,0,2))
+AIC(model1)
+checkresiduals(model1)
+```
+Residual almost have zero mean and somehow constant. Also autocorrelations were decreased significantly.
+Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random - model1$residuals
+transformed_fitted = fitted + Trend + Seasonal
+
+plot(prod5_7[1:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 5 (Xiaomi Kulaklık) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[1:390], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA model selected. Because last three values are missing due to decomposing (moving average for trend variable), ten days-ahead predictions are performed. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted it and calculated Mean Absolute Percentage Error (MAPE) for ARIMA model in 7-days test period.
+
+```{r}
+forecast = predict(model1, n.ahead = 10)$pred
+forecast_ts = ts(forecast, frequency = 7, start=c(56,3))
+
+Trend1 = tail(Trend[!is.na(Trend)],1)
+Seasonal1 = Seasonal[1:10]
+forecast1 = forecast_ts + Trend1 + Seasonal1
+
+plot(prod5_7, type= "l", ylab = "Sales Quantity ", xlab = "Weeks", main="Actual vs Predicted Values of Product 5 (Xiaomi Kulaklık) Sales in Last 7 Days", xlim=c(52,58))
+points(forecast1, type = "l", col = "red")
+
+prod5_MAPE_ARIMA=100*mean(abs((forecast1[4:10]-prod5$sold_count[391:397])/prod5$sold_count[391:397]))
+prod5_MAPE_ARIMA
+
+```
+
+Then we check correlations to decide which regressors to use in ARIMA model, some regressors are full of zero or most of them are zero such as favored_count, category_basket and category_brand_sold. Some of others is fuzzy from some point like ty_visit. That's why we didn't use them as regressors. Most of the time, we use price, basket_count, category_sold and category_favored. For each product, these regressors with highly correlated are tried to be implement to ARIMA models.
+
+```{r}
+cor(prod5$sold_count, prod5$price)
+cor(prod5$sold_count, prod5$favored_count)
+cor(prod5$sold_count, prod5$basket_count)
+cor(prod5$sold_count, prod5$category_sold)
+cor(prod5$sold_count, prod5$category_favored)
+```
+
+Continue with highest correlated regressors with the sales quantity, and use them in the Arima as xreg. They are seperated to train and test dates.
+We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+prod5_xreg1=cbind(prod5$basket_count[1:390])
+prod5_xreg2=cbind(prod5$basket_count[391:n])
+
+arima_prod5=Arima(Random[1:390],xreg=as.matrix(prod5_xreg1), order=c(3,0,2))
+AIC(arima_prod5)
+```
+
+Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random[1:390] - arima_prod5$residuals
+transformed_fitted = fitted + Trend[1:390] + Seasonal[1:390]
+
+plot(prod5_7[1:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 5 (Xiaomi Kulaklık) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[1:390], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA with regressors model selected. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted the predicted and actual values and how far we are from reality and check if there is improvement on MAPE or not.
+
+```{r}
+forecast_arima_prod5=forecast(arima_prod5,xreg=as.matrix(prod5_xreg2))
+forecast_arima_prod5_xts=xts(forecast_arima_prod5$mean,order.by=test_dates)
+
+TrendX = tail(Trend[!is.na(Trend)],1)
+SeasonalX = Seasonal[1:7]
+forecastX = forecast_arima_prod5_xts + TrendX + SeasonalX
+
+plot(dates,prod5$sold_count, type="l",xlim=as.Date(c("2021-06-01", "2021-06-25")),xlab="Dates between 2021-06-01 and 2021-06-25", ylab = "Sales Quantity ",main="Actual vs Predicted Values of Product 5 (Xiaomi Kulaklık) Sales in Last 7 Days",)
+points(test_dates,forecastX, type= "l", col ="red")
+
+prod5_MAPE_ARIMAX=100*mean(abs((forecastX-prod5$sold_count[391:397])/prod5$sold_count[391:397]))
+prod5_MAPE_ARIMAX
+```
+
+Mean Absolute Percentage Error is decreased from 35.46683 to 18.45403 when we use regressors in selected ARIMA model.
+
+---
+
+## Product 6 (Fakir Süpürge)
+
+```{r}
+prod6=subset(data, data$product_content_id==7061886)
+plot(dates,prod6$sold_count,type="l", main="Product 6 Sales", xlab= "Dates", ylab= "Sales")
+
+```
+
+Let's check autocorrelations to detect if there is any seasonality.
+
+```{r}
+acf(prod6$sold_count)
+acf(prod6$sold_count, lag.max = 100)
+pacf(prod6$sold_count)
+```
+
+Autocorrelations at lag=1, lag=2 and lag=16 are somehow higher, also we checked at lag = 100 to detect if there is wider seasonality. It can be seen that It looks that first 20 lag is higher than remaining. KPSS test is applied to check if our sales data stationary or not.
+
+```{r}
+test=ur.kpss(prod6$sold_count)
+summary(test)
+```
+
+Test statistic is above all critical values, so our data is not stationary. Let's decompose data at different levels to refine data from seasonal and trended impacts. First, decompose at freq=7 and assume that there is daily seasonality. Variance is not constant over time but we cannot say that there is increasing or decreasing variance so, let's use additive decomposing.
+
+```{r}
+prod6_xts=ts(prod6, freq=7)
+prod6_train_xts=prod6_xts[index(prod6_xts)<"2021-06-19" & index(prod6_xts)>="2020-05-25"]
+prod6_test_xts=prod6_xts[index(prod6_xts)>="2021-06-19"]
+
+prod6_7=ts(prod6$sold_count,freq=7)
+Decomposed7=decompose(prod6_7, type="additive")
+plot(Decomposed7)
+```
+Trend is somehow decreasing. Also, it is not constant over time, it fluctuates around some value and smaller at the end. Because freq=7 it tooks average of every 7 data points. It  traces the path of data very similarly.
+Seasonal variable also eliminates of the daily seasonal effect, there is sinusiodal pattern like cardiograph.
+
+Because our data include almost 13 months for each product, it is impossible to decompose data at weekly, monthly or yearly level.
+When we try to decompose at weekly level (which corresponds to frequency equals 7*52=364 or we can first aggregate data to weekly level and then make it time series with freq=52), our data contains 397 data point for each product so, time series will be less than two seasons.
+It is also true for monthly because we have only 13 months, while we should use freq=12 aggregating our data points to monthly level.
+And same scenario for the decomposing at yearly level, we don't have at least three years data to detect yearly seasonality. 
+
+```{r, eval=FALSE}
+"prod6_364=ts(prod6$sold_count,freq=364)
+Decomposed364=decompose(prod6_364, type=additive)
+plot(Decomposed364)"
+```
+
+We get the error: Error in decompose(prod6_364, type = "additive") : time series has no or less than 2 periods
+We continue with decomposed series at freq=7 and type=additive. Because random variable looks stationary, trend and seasonal variables make sense. 
+We apply Kpss stationarity test to detrended and deseasonalized data.
+
+```{r}
+Trend=Decomposed7$trend
+Seasonal=Decomposed7$seasonal
+Random=Decomposed7$random
+
+stationaritytest=ur.kpss(Random)
+summary(stationaritytest)
+```
+
+Data looks stationary according to test statistic we get from KPSS stationary test. 
+
+```{r}
+acf(Random, lag.max = 30, na.action = na.pass,  main = " ACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+pacf(Random, lag.max = 30, na.action = na.pass,  main = " PACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+```
+Now, both autocorrelations and partial autocorrelations has decreased but there is still high partial correlations at negative side.
+We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+model1=arima(Random, order=c(1,0,0))
+AIC(model1)
+checkresiduals(model1)
+```
+Residuals have almost zero mean, but constant variance assumption is violated due to outliers.
+Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random - model1$residuals
+transformed_fitted = fitted + Trend + Seasonal
+
+plot(prod6_7[1:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 6 (Fakir Süpürge) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[1:390], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA model selected. Because last three values are missing due to decomposing (moving average for trend variable), ten days-ahead predictions are performed. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted it and calculated Mean Absolute Percentage Error (MAPE) for ARIMA model in 7-days test period.
+
+```{r}
+forecast = predict(model1, n.ahead = 10)$pred
+forecast_ts = ts(forecast, frequency = 7, start=c(56,3))
+
+Trend1 = tail(Trend[!is.na(Trend)],1)
+Seasonal1 = Seasonal[1:10]
+forecast1 = forecast_ts + Trend1 + Seasonal1
+
+plot(prod6_7, type= "l", ylab = "Sales Quantity ", xlab = "Weeks", main="Actual vs Predicted Values of Product 6 (Fakir Süpürge) Sales in Last 7 Days", xlim=c(54,58))
+points(forecast1, type = "l", col = "red")
+
+prod6_MAPE_ARIMA=100*mean(abs((forecast1[4:10]-prod6$sold_count[391:397])/prod6$sold_count[391:397]))
+prod6_MAPE_ARIMA
+
+```
+
+Then we check correlations to decide which regressors to use in ARIMA model, some regressors are full of zero or most of them are zero such as favored_count, category_basket and category_brand_sold. Some of others is fuzzy from some point like ty_visit. That's why we didn't use them as regressors. Most of the time, we use price, basket_count, category_sold and category_favored. For each product, these regressors with highly correlated are tried to be implement to ARIMA models.
+
+```{r}
+cor(prod6$sold_count, prod6$price)
+cor(prod6$sold_count, prod6$favored_count)
+cor(prod6$sold_count, prod6$basket_count)
+cor(prod6$sold_count, prod6$category_sold)
+cor(prod6$sold_count, prod6$category_favored)
+```
+
+Continue with highest correlated regressors with the sales quantity, and use them in the Arima as xreg. They are seperated to train and test dates.
+We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+prod6_xreg1=cbind(prod6$basket_count[1:390])
+prod6_xreg2=cbind(prod6$basket_count[391:n])
+
+arima_prod6=Arima(Random[1:390],xreg=as.matrix(prod6_xreg1), order=c(1,0,0))
+AIC(arima_prod6)
+```
+
+Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random[1:390] - arima_prod6$residuals
+transformed_fitted = fitted + Trend[1:390] + Seasonal[1:390]
+
+plot(prod6_7[1:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 6 (Fakir Süpürge) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[1:390], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA with regressors model selected. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted the predicted and actual values and how far we are from reality and check if there is improvement on MAPE or not.
+
+```{r}
+forecast_arima_prod6=forecast(arima_prod6,xreg=as.matrix(prod6_xreg2))
+forecast_arima_prod6_xts=xts(forecast_arima_prod6$mean,order.by=test_dates)
+
+TrendX = tail(Trend[!is.na(Trend)],1)
+SeasonalX = Seasonal[1:7]
+forecastX = forecast_arima_prod6_xts + TrendX + SeasonalX
+
+plot(dates,prod6$sold_count, type="l",xlim=as.Date(c("2021-06-01", "2021-06-25")),xlab="Dates between 2021-06-01 and 2021-06-25", ylab = "Sales Quantity ",main="Actual vs Predicted Values of Product 6 (Fakir Süpürge) Sales in Last 7 Days",)
+points(test_dates,forecastX, type= "l", col ="red")
+
+prod6_MAPE_ARIMAX=100*mean(abs((forecastX-prod6$sold_count[391:397])/prod6$sold_count[391:397]))
+prod6_MAPE_ARIMAX
+```
+
+Mean Absolute Percentage Error is decreased from 160.6055 to 137.8308 when we use regressors in selected ARIMA model.
+
+---
+
+## Product 7 (Trenyolmilla Tayt)
+
+```{r}
+prod7=subset(data, data$product_content_id==31515569)
+plot(dates,prod7$sold_count,type="l", main="Product 7 Sales", xlab= "Dates", ylab= "Sales")
+
+```
+
+Let's check autocorrelations to detect if there is any seasonality.
+
+```{r}
+acf(prod7$sold_count)
+acf(prod7$sold_count, lag.max = 100)
+pacf(prod7$sold_count)
+```
+
+Autocorrelations at lag=1, lag=2 and lag=16 is somehow higher, also we checked at lag = 100 to detect if there is wider seasonality. It looks that first 20 lag is higher than remaining. KPSS test is applied to check if our sales data stationary or not.
+
+```{r}
+test=ur.kpss(prod7$sold_count)
+summary(test)
+```
+
+Test statistic is not above all critical values, so our data can be stationary. Let's decompose data at different levels to refine data from seasonal and trended impacts. First, decompose at freq=7 and assume that there is daily seasonality. Variance is not constant over time but we cannot say that there is increasing or decreasing variance so, let's use additive decomposing.
+
+
+```{r}
+prod7_xts=ts(prod7, freq=7)
+prod7_train_xts=prod7_xts[index(prod7_xts)<"2021-06-19" & index(prod7_xts)>="2020-05-25"]
+prod7_test_xts=prod7_xts[index(prod7_xts)>="2021-06-19"]
+
+prod7_7=ts(prod7$sold_count,freq=7)
+Decomposed7=decompose(prod7_7, type="additive")
+plot(Decomposed7)
+```
+Trend is neither increasing nor decreasing. Also, it is not constant over time, it fluctuates around some value but smaller at the end . Because freq=7 it tooks average of every 7 data points. It  traces the path of data very similarly. 
+Seasonal variable also eliminates of the daily seasonal effect, there is sinusiodal pattern like cardiograph.
+
+Because our data include almost 13 months for each product, it is impossible to decompose data at weekly, monthly or yearly level.
+When we try to decompose at weekly level (which corresponds to frequency equals 7*52=364 or we can first aggregate data to weekly level and then make it time series with freq=52), our data contains 397 data point for each product so, time series will be less than two seasons.
+It is also true for monthly because we have only 13 months, while we should use freq=12 aggregating our data points to monthly level.
+And same scenario for the decomposing at yearly level, we don't have at least three years data to detect yearly seasonality. 
+
+```{r, eval=FALSE}
+"prod7_364=ts(prod7$sold_count,freq=364)
+Decomposed364=decompose(prod7_364, type=additive)
+plot(Decomposed364)"
+```
+
+We get the error: Error in decompose(prod7_364, type = "additive") : time series has no or less than 2 periods
+We continue with decomposed series at freq=7 and type=additive. Because random variable looks stationary, trend and seasonal variables make sense. 
+We apply Kpss stationarity test to detrended and deseasonalized data.
+
+```{r}
+Trend=Decomposed7$trend
+Seasonal=Decomposed7$seasonal
+Random=Decomposed7$random
+
+stationaritytest=ur.kpss(Random)
+summary(stationaritytest)
+```
+
+Data looks stationary according to test statistic we get from KPSS stationary test. 
+
+```{r}
+acf(Random, lag.max = 30, na.action = na.pass,  main = " ACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+pacf(Random, lag.max = 30, na.action = na.pass,  main = " PACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+```
+Autocorrelations and partial autocorrelations were decreased, but there is still some pac at negative side.
+We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+model1=arima(Random, order=c(2,0,4))
+AIC(model1)
+checkresiduals(model1)
+```
+Residuals have zero mean not constant variance due to some outliers and autocorrelations are not severe except lag=16.
+Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random - model1$residuals
+transformed_fitted = fitted + Trend + Seasonal
+
+plot(prod7_7[1:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 7 (TM Tayt) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[1:390], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA model selected. Because last three values are missing due to decomposing (moving average for trend variable), ten days-ahead predictions are performed. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted it and calculated Mean Absolute Percentage Error (MAPE) for ARIMA model in 7-days test period.
+
+```{r}
+forecast = predict(model1, n.ahead = 10)$pred
+forecast_ts = ts(forecast, frequency = 7, start=c(56,3))
+
+Trend1 = tail(Trend[!is.na(Trend)],1)
+Seasonal1 = Seasonal[1:10]
+forecast1 = forecast_ts + Trend1 + Seasonal1
+
+plot(prod7_7, type= "l", ylab = "Sales Quantity ", xlab = "Weeks", main="Actual vs Predicted Values of Product 7 (TM Tayt) Sales in Last 7 Days", xlim=c(52,58))
+points(forecast1, type = "l", col = "red")
+
+prod7_MAPE_ARIMA=100*mean(abs((forecast1[4:10]-prod7$sold_count[391:397])/prod7$sold_count[391:397]))
+prod7_MAPE_ARIMA
+
+```
+
+Then we check correlations to decide which regressors to use in ARIMA model, some regressors are full of zero or most of them are zero such as favored_count, category_basket and category_brand_sold. Some of others is fuzzy from some point like ty_visit. That's why we didn't use them as regressors. Most of the time, we use price, basket_count, category_sold and category_favored. For each product, these regressors with highly correlated are tried to be implement to ARIMA models.
+
+```{r}
+cor(prod7$sold_count, prod7$price)
+cor(prod7$sold_count, prod7$favored_count)
+cor(prod7$sold_count, prod7$basket_count)
+cor(prod7$sold_count, prod7$category_sold)
+cor(prod7$sold_count, prod7$category_favored)
+```
+
+Continue with highest correlated regressors with the sales quantity, and use them in the Arima as xreg. They are seperated to train and test dates.
+We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+prod7_xreg1=cbind(prod7$basket_count[1:390],prod7$category_favored[1:390])
+prod7_xreg2=cbind(prod7$basket_count[391:n],prod7$category_favored[391:n])
+
+arima_prod7=Arima(Random[1:390],xreg=as.matrix(prod7_xreg1), order=c(2,0,4))
+AIC(arima_prod7)
+```
+
+Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random[1:390] - arima_prod7$residuals
+transformed_fitted = fitted + Trend[1:390] + Seasonal[1:390]
+
+plot(prod7_7[1:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 7 (TM Tayt) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[1:390], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA with regressors model selected. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted the predicted and actual values and how far we are from reality and check if there is improvement on MAPE or not.
+
+```{r}
+forecast_arima_prod7=forecast(arima_prod7,xreg=as.matrix(prod7_xreg2))
+forecast_arima_prod7_xts=xts(forecast_arima_prod7$mean,order.by=test_dates)
+
+TrendX = tail(Trend[!is.na(Trend)],1)
+SeasonalX = Seasonal[1:7]
+forecastX = forecast_arima_prod7_xts + TrendX + SeasonalX
+
+plot(dates,prod7$sold_count, type="l",xlim=as.Date(c("2021-06-01", "2021-06-25")),xlab="Dates between 2021-06-01 and 2021-06-25", ylab = "Sales Quantity ",main="Actual vs Predicted Values of Product 7 (TM Tayt) Sales in Last 7 Days",)
+points(test_dates,forecastX, type= "l", col ="red")
+
+prod7_MAPE_ARIMAX=100*mean(abs((forecastX-prod7$sold_count[391:397])/prod7$sold_count[391:397]))
+prod7_MAPE_ARIMAX
+```
+
+Mean Absolute Percentage Error is decreased from 63.69119 to 56.06433 when we use regressors in selected ARIMA model.
+
+---
+
+## Product 8 (Trendyolmilla Bikini Üstü 1)
+
+```{r}
+prod8=subset(data, data$product_content_id==73318567)
+plot(dates,prod8$sold_count,type="l", main="Product 8 Sales", xlab= "Dates", ylab= "Sales")
+
+```
+
+Let's check autocorrelations to detect if there is any seasonality.
+
+```{r}
+acf(prod8$sold_count)
+acf(prod8$sold_count, lag.max = 100)
+pacf(prod8$sold_count)
+```
+
+Autocorrelations trace exponentially decreasing path, also we checked at lag = 100 to detect if there is wider seasonality. It looks that first 40 lag is higher than remaining. KPSS test is applied to check if our sales data stationary or not.
+
+```{r}
+test=ur.kpss(prod8$sold_count)
+summary(test)
+```
+
+Test statistic is above critical values, so our data is not stationary. Let's decompose data at different levels to refine data from seasonal and trended impacts. First, decompose at freq=7 and assume that there is daily seasonality. Variance is not constant over time but we cannot say that there is increasing or decreasing variance so, let's use additive decomposing.
+
+
+```{r}
+prod8_xts=ts(prod8, freq=7)
+prod8_train_xts=prod8_xts[index(prod8_xts)<"2021-06-19" & index(prod8_xts)>="2021-01-23"]
+prod8_test_xts=prod8_xts[index(prod8_xts)>="2021-06-19"]
+
+prod8_7=ts(prod8$sold_count,freq=7)
+Decomposed7=decompose(prod8_7, type="additive")
+plot(Decomposed7)
+```
+Trend is neither increasing nor decreasing. Also, it is constant over time at first, then it begin to increase. Because freq=7 it tooks average of every 7 data points. It  traces the path of data very similarly. This stems from there is no sales most of the time.
+Seasonal variable also eliminates of the daily seasonal effect, there is sinusiodal pattern like cardiograph.
+
+Because our data include almost 13 months for each product, it is impossible to decompose data at weekly, monthly or yearly level.
+When we try to decompose at weekly level (which corresponds to frequency equals 7*52=364 or we can first aggregate data to weekly level and then make it time series with freq=52), our data contains 397 data point for each product so, time series will be less than two seasons.
+It is also true for monthly because we have only 13 months, while we should use freq=12 aggregating our data points to monthly level.
+And same scenario for the decomposing at yearly level, we don't have at least three years data to detect yearly seasonality. 
+
+```{r, eval=FALSE}
+"prod8_364=ts(prod8$sold_count,freq=364)
+Decomposed364=decompose(prod8_364, type=additive)
+plot(Decomposed364)"
+```
+
+We get the error: Error in decompose(prod8_364, type = "additive") : time series has no or less than 2 periods
+We continue with decomposed series at freq=7 and type=additive. Because random variable looks stationary, trend and seasonal variables make sense. 
+We apply Kpss stationarity test to detrended and deseasonalized data.
+
+```{r}
+Trend=Decomposed7$trend
+Seasonal=Decomposed7$seasonal
+Random=Decomposed7$random
+
+stationaritytest=ur.kpss(Random)
+summary(stationaritytest)
+```
+
+Data looks stationary according to test statistic we get from KPSS stationary test. 
+
+```{r}
+acf(Random, lag.max = 30, na.action = na.pass,  main = " ACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+pacf(Random, lag.max = 30, na.action = na.pass,  main = " PACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+```
+Autocorrelations were decreased significantly but there are some partial autocorrelations at negative side.
+We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+model1=arima(Random, order=c(0,0,4))
+AIC(model1)
+checkresiduals(model1)
+```
+When we look at residuals, they have mean zero but variance is not constant. Autocorrelation of them were decreased but they are not in the reference interval.
+Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random - model1$residuals
+transformed_fitted = fitted + Trend + Seasonal
+
+plot(prod8_7[244:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 8 (TM Bikini Üstü 1) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[244:390], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA model selected. Because last three values are missing due to decomposing (moving average for trend variable), ten days-ahead predictions are performed. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted it and calculated Mean Absolute Percentage Error (MAPE) for ARIMA model in 7-days test period.
+
+```{r}
+forecast = predict(model1, n.ahead = 10)$pred
+forecast_ts = ts(forecast, frequency = 7, start=c(56,3))
+
+Trend1 = tail(Trend[!is.na(Trend)],1)
+Seasonal1 = Seasonal[1:10]
+forecast1 = forecast_ts + Trend1 + Seasonal1
+
+plot(prod8_7, type= "l", ylab = "Sales Quantity ", xlab = "Weeks", main="Actual vs Predicted Values of Product 8 (TM Bikini Üstü 1) Sales in Last 7 Days", xlim=c(52,58))
+points(forecast1, type = "l", col = "red")
+
+prod8_MAPE_ARIMA=100*mean(abs((forecast1[4:10]-prod8$sold_count[391:397])/prod8$sold_count[391:397]))
+prod8_MAPE_ARIMA
+
+```
+
+Then we check correlations to decide which regressors to use in ARIMA model, some regressors are full of zero or most of them are zero such as favored_count, category_basket and category_brand_sold. Some of others is fuzzy from some point like ty_visit. That's why we didn't use them as regressors. Most of the time, we use price, basket_count, category_sold and category_favored. For each product, these regressors with highly correlated are tried to be implement to ARIMA models.
+
+```{r}
+cor(prod8$sold_count, prod8$price)
+cor(prod8$sold_count, prod8$favored_count)
+cor(prod8$sold_count, prod8$basket_count)
+cor(prod8$sold_count, prod8$category_sold)
+cor(prod8$sold_count, prod8$category_favored)
+```
+
+Continue with highest correlated regressors with the sales quantity, and use them in the Arima as xreg. They are seperated to train and test dates.
+We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+prod8_xreg1=cbind(prod8$basket_count[244:390],prod8$category_favored[244:390])
+prod8_xreg2=cbind(prod8$basket_count[391:n],prod8$category_favored[391:n])
+
+arima_prod8=Arima(Random[244:390],xreg=as.matrix(prod8_xreg1), order=c(0,0,4))
+AIC(arima_prod8)
+```
+
+Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random[244:390] - arima_prod8$residuals
+transformed_fitted = fitted + Trend[244:390] + Seasonal[244:390]
+
+plot(prod8_7[244:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 8 (TM Bikini Üstü 1) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[1:147], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA with regressors model selected. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted the predicted and actual values and how far we are from reality and check if there is improvement on MAPE or not.
+
+```{r}
+forecast_arima_prod8=forecast(arima_prod8,xreg=as.matrix(prod8_xreg2))
+forecast_arima_prod8_xts=xts(forecast_arima_prod8$mean,order.by=test_dates)
+
+TrendX = tail(Trend[!is.na(Trend)],1)
+SeasonalX = Seasonal[1:7]
+forecastX = forecast_arima_prod8_xts + TrendX + SeasonalX
+
+plot(dates,prod8$sold_count, type="l",xlim=as.Date(c("2021-06-01", "2021-06-25")),xlab="Dates between 2021-06-01 and 2021-06-25", ylab = "Sales Quantity ",main="Actual vs Predicted Values of Product 8 (TMBikini Üstü 1) Sales in Last 7 Days",)
+points(test_dates,forecastX, type= "l", col ="red")
+
+prod8_MAPE_ARIMAX=100*mean(abs((forecastX-prod8$sold_count[391:397])/prod8$sold_count[391:397]))
+prod8_MAPE_ARIMAX
+```
+
+Mean Absolute Percentage Error is decreased from 42.18364 to 29.99857 when we use regressors in selected ARIMA model.
+
+---
+
+## Product 9 (Trendyolmilla Bikini Üstü 2)
+
+```{r}
+prod9=subset(data, data$product_content_id==32737302)
+plot(dates,prod9$sold_count,type="l", main="Product 9 Sales", xlab= "Dates", ylab= "Sales")
+
+```
+
+Let's check autocorrelations to detect if there is any seasonality.
+
+```{r}
+acf(prod9$sold_count)
+acf(prod9$sold_count, lag.max = 100)
+pacf(prod9$sold_count)
+```
+Autocorrelations traces a decreasing exponential path with a high value in first 25 lag, also we checked at lag = 100 to detect if there is wider seasonality. It looks that first 100 lag are also high. KPSS test is applied to check if our sales data stationary or not.
+
+```{r}
+test=ur.kpss(prod9$sold_count)
+summary(test)
+```
+
+Test statistic is above critical values, so our data is not stationary. Let's decompose data at different levels to refine data from seasonal and trended impacts. First, decompose at freq=7 and assume that there is daily seasonality. Variance is not constant over time but we cannot say that there is increasing or decreasing variance so, let's use additive decomposing.
+
+
+```{r}
+prod9_xts=ts(prod9, freq=7)
+prod9_train_xts=prod9_xts[index(prod9_xts)<"2021-06-19" & index(prod9_xts)>="2021-02-20"]
+prod9_test_xts=prod9_xts[index(prod9_xts)>="2021-06-19"]
+
+prod9_7=ts(prod9$sold_count,freq=7)
+Decomposed7=decompose(prod9_7, type="additive")
+plot(Decomposed7)
+```
+Trend is neither increasing nor decreasing. Also, it is not constant over time. Firstly decreases and through end, it increases. Because freq=7 it tooks average of every 7 data points. It  traces the path of data very similarly. This stems from there is no sales most of the time.
+Seasonal variable also eliminates of the daily seasonal effect, there is sinusiodal pattern like cardiograph.
+
+Because our data include almost 13 months for each product, it is impossible to decompose data at weekly, monthly or yearly level.
+When we try to decompose at weekly level (which corresponds to frequency equals 7*52=364 or we can first aggregate data to weekly level and then make it time series with freq=52), our data contains 397 data point for each product so, time series will be less than two seasons.
+It is also true for monthly because we have only 13 months, while we should use freq=12 aggregating our data points to monthly level.
+And same scenario for the decomposing at yearly level, we don't have at least three years data to detect yearly seasonality. 
+
+```{r, eval=FALSE}
+"prod9_364=ts(prod9$sold_count,freq=364)
+Decomposed364=decompose(prod9_364, type=additive)
+plot(Decomposed364)"
+```
+
+We get the error: Error in decompose(prod9_364, type = "additive") : time series has no or less than 2 periods
+We continue with decomposed series at freq=7 and type=additive. Because random variable looks stationary, trend and seasonal variables make sense. 
+We apply Kpss stationarity test to detrended and deseasonalized data.
+
+```{r}
+Trend=Decomposed7$trend
+Seasonal=Decomposed7$seasonal
+Random=Decomposed7$random
+
+stationaritytest=ur.kpss(Random)
+summary(stationaritytest)
+```
+
+Data looks stationary according to test statistic we get from KPSS stationary test. 
+
+```{r}
+acf(Random, lag.max = 30, na.action = na.pass,  main = " ACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+pacf(Random, lag.max = 30, na.action = na.pass,  main = " PACF Graph of Deseasonalized and Detrended Data (freq=7) ")
+```
+
+Autocorrelations were decreased significantly but there are still partial autocorrelations at negative side.
+We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+model1=arima(Random, order=c(0,0,4))
+AIC(model1)
+checkresiduals(model1)
+```
+Residuals have zero mean but their variance is not constant. Also autocorrelations of redisuals is not high and close to reference interval.
+Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random - model1$residuals
+transformed_fitted = fitted + Trend + Seasonal
+
+plot(prod9_7[272:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 9 (TM Bikini Üstü 2) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[272:390], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA model selected. Because last three values are missing due to decomposing (moving average for trend variable), ten days-ahead predictions are performed. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted it and calculated Mean Absolute Percentage Error (MAPE) for ARIMA model in 7-days test period.
+
+```{r}
+forecast = predict(model1, n.ahead = 10)$pred
+forecast_ts = ts(forecast, frequency = 7, start=c(56,3))
+
+Trend1 = tail(Trend[!is.na(Trend)],1)
+Seasonal1 = Seasonal[1:10]
+forecast1 = forecast_ts + Trend1 + Seasonal1
+
+plot(prod9_7, type= "l", ylab = "Sales Quantity ", xlab = "Weeks", main="Actual vs Predicted Values of Product 9 (TM Bikini Üstü 2) Sales in Last 7 Days", xlim=c(52,58))
+points(forecast1, type = "l", col = "red")
+
+prod9_MAPE_ARIMA=100*mean(abs((forecast1[4:10]-prod9$sold_count[391:397])/prod9$sold_count[391:397]))
+prod9_MAPE_ARIMA
+
+```
+
+Then we check correlations to decide which regressors to use in ARIMA model, some regressors are full of zero or most of them are zero such as favored_count, category_basket and category_brand_sold. Some of others is fuzzy from some point like ty_visit. That's why we didn't use them as regressors. Most of the time, we use price, basket_count, category_sold and category_favored. For each product, these regressors with highly correlated are tried to be implement to ARIMA models.
+
+```{r}
+cor(prod9$sold_count, prod9$price)
+cor(prod9$sold_count, prod9$favored_count)
+cor(prod9$sold_count, prod9$basket_count)
+cor(prod9$sold_count, prod9$category_sold)
+```
+
+Continue with highest correlated regressors with the sales quantity, and use them in the Arima as xreg. They are seperated to train and test dates.
+We can try ARIMA models according to ACF and PACF plots yielding the lowest AIC. 
+
+```{r}
+prod9_xreg1=cbind(prod9$basket_count[272:390],prod9$category_favored[272:390])
+prod9_xreg2=cbind(prod9$basket_count[391:n],prod9$category_favored[391:n])
+
+arima_prod9=Arima(Random[272:390],xreg=as.matrix(prod9_xreg1), order=c(0,0,4))
+AIC(arima_prod9)
+```
+
+Let's obtain fitted model for train period, backtransformed to original structure and plot it.
+
+```{r}
+fitted= Random[272:390] - arima_prod9$residuals
+transformed_fitted = fitted + Trend[272:390] + Seasonal[272:390]
+
+plot(prod9_7[272:397], type = "l", col= "black", main = "Actual vs. Fitted Values of Product 9 (TM Bikini Üstü 2) Sales in Train Period", ylab = "Sales Quantity")
+points(transformed_fitted[1:129], type = "l", col = "blue")
+```
+
+Last 7 days are predicted with ARIMA with regressors model selected. Using last trend value and seasonality, forecasted values are backtransformed.
+Also we plotted the predicted and actual values and how far we are from reality and check if there is improvement on MAPE or not.
+
+```{r}
+forecast_arima_prod9=forecast(arima_prod9,xreg=as.matrix(prod9_xreg2))
+forecast_arima_prod9_xts=xts(forecast_arima_prod9$mean,order.by=test_dates)
+
+TrendX = tail(Trend[!is.na(Trend)],1)
+SeasonalX = Seasonal[1:7]
+forecastX = forecast_arima_prod9_xts + TrendX + SeasonalX
+
+plot(dates,prod9$sold_count, type="l",xlim=as.Date(c("2021-06-01", "2021-06-25")),xlab="Dates between 2021-06-01 and 2021-06-25", ylab = "Sales Quantity ",main="Actual vs Predicted Values of Product 9 (TM Bikini Üstü 2) Sales in Last 7 Days",)
+points(test_dates,forecastX, type= "l", col ="red")
+
+prod9_MAPE_ARIMAX=100*mean(abs((forecastX-prod9$sold_count[391:397])/prod9$sold_count[391:397]))
+prod9_MAPE_ARIMAX
+```
+
+Mean Absolute Percentage Error is decreased from 27.54648 to 21.00938 when we use regressors in selected ARIMA model.
+
+---
+
+# Conclusion
+
+To conclude, nine arima with no regressors and nine with regressors models have constructed for nine Trendyol products. We have seek an answer if using regressors can improve our model and by the way our forecasts. During the test period we have calculated the MAPE of each product and MAE of the product 1 (because of the zero sales leading to Inf consequences). Except product 1 which is problematic, each of the eight products's Mean Absolute Percentage Error is decreased. We can use that models which are Arima with regressors to forecast sales values of the selected products. However, data wider than we use can help us to decompose data at different frequencies to detect different seasonalities. This may make data more stationary and our forecasts may be improved.
+
+---
